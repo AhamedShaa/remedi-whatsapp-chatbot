@@ -1,0 +1,65 @@
+# ===================================================================
+# REMEDI CHATBOT - PYTHON DEPENDENCIES
+# ===================================================================
+# Optimized for Python 3.10+ and resolves all dependency conflicts
+# Install: pip install -r requirements.txt
+# ===================================================================
+
+# ===== CORE FRAMEWORK =====
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# ===== LANGGRAPH & LANGCHAIN =====
+# Note: LangChain 0.3.x requires pydantic>=2.7.4
+langgraph>=0.2.0
+langchain>=0.3.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+
+# ===== OPENAI =====
+openai>=1.0.0
+
+# ===== MONGODB =====
+# Motor for async MongoDB operations
+motor>=3.3.0
+pymongo>=4.6.0
+
+# ===== CONFIGURATION =====
+# Pydantic for settings management (must be >=2.7.4 for LangChain)
+pydantic>=2.7.4,<3.0.0
+pydantic-settings>=2.1.0
+python-dotenv>=1.0.0
+
+# ===== HTTP CLIENT =====
+httpx>=0.25.0
+requests>=2.31.0
+
+# ===== UTILITIES =====
+# Date/time handling
+python-dateutil>=2.8.2
+pytz>=2023.3
+
+# Logging
+python-json-logger>=2.0.7
+
+motor 
+pymongo
+aiohttp
+apscheduler>=3.10.0
+# ===== DEVELOPMENT TOOLS (Optional) =====
+# Uncomment these if you want development tools
+
+# Testing
+# pytest>=7.4.0
+# pytest-asyncio>=0.21.0
+
+# Code formatting
+# black>=23.0.0
+
+# Type checking
+# mypy>=1.7.0
+
+# Jupyter for learning notebooks
+# jupyter>=1.0.0
+# ipython>=8.18.0
