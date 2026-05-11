@@ -1,9 +1,7 @@
 # jobs/reminder_jobs.py
-import logging
 from datetime import datetime, timedelta
-import os
 
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 async def send_appointment_reminders(db, whatsapp):
     """Send appointment reminders (24h, 2h, 15min before)"""
@@ -53,7 +51,7 @@ async def send_appointment_reminders(db, whatsapp):
         logger.info(f"Processed {len(upcoming)} upcoming appointments")
         
     except Exception as e:
-        logger.error(f"Error in appointment reminder job: {str(e)}", exc_info=True)
+        logger.exception(f"Error in appointment reminder job: {str(e)}")
 
 
 async def _send_24h_reminder(whatsapp, phone, patient, appointment):
@@ -206,7 +204,7 @@ Need to schedule? Reply with *BLOOD TEST* or contact support."""
         logger.info(f"Processed {len(patients)} blood test reminders")
         
     except Exception as e:
-        logger.error(f"Error in blood test reminder job: {str(e)}", exc_info=True)
+        logger.exception(f"Error in blood test reminder job: {str(e)}")
 
 
 async def detect_health_patterns(db, whatsapp):
@@ -263,4 +261,4 @@ This is an automated alert from Remedi Chronic Care."""
         logger.info("Completed health pattern detection")
         
     except Exception as e:
-        logger.error(f"Error in health pattern detection: {str(e)}", exc_info=True)
+        logger.exception(f"Error in health pattern detection: {str(e)}")

@@ -1,10 +1,9 @@
 # database/mongodb.py - MongoDB operations
-import os
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import ReturnDocument
+from config.settings import settings
 from datetime import datetime, timedelta
-import logging
-
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 class MongoDB:
     def __init__(self):
@@ -14,8 +13,8 @@ class MongoDB:
     async def connect(self):
         """Connect to MongoDB"""
         try:
-            self.client = AsyncIOMotorClient(os.getenv("MONGODB_URI"))
-            self.db = self.client[os.getenv("DB_NAME", "remedi_chronic_care")]
+            self.client = AsyncIOMotorClient(settings.mongodb_uri)
+            self.db = self.client[settings.db_name]
             
             # Create indexes
             await self._create_indexes()
@@ -48,6 +47,43 @@ class MongoDB:
         # Appointments collection indexes
         await self.db.appointments.create_index([("patient_id", 1), ("scheduled_date", 1)])
         await self.db.appointments.create_index("status")
+
+        # Counters collection — _id is the primary key for atomic seq documents
+        await self.db.counters.create_index("_id")
+
+        # Admin users and doctors — unique email per collection
+        await self.db.admin_users.create_index("email", unique=True)
+        await self.db.doctors.create_index("email", unique=True)
+
+        # Audit logs — time-series style, searched by actor and patient
+        await self.db.audit_logs.create_index([("timestamp", -1)])
+        await self.db.audit_logs.create_index("patient_id")
+        await self.db.audit_logs.create_index("actor_id")
+
+        # Enforce audit_logs as append-only via JSON Schema validator.
+        # Note: MongoDB validators guard insert/update content but cannot block
+        # DELETE commands.  For full append-only enforcement, deny the
+        # application user's "delete" and "update" privileges on this collection
+        # via MongoDB RBAC in production.
+        await self.db.command({
+            "collMod": "audit_logs",
+            "validator": {
+                "$jsonSchema": {
+                    "bsonType": "object",
+                    "required": ["timestamp", "actor_id", "method", "endpoint", "ip_address"],
+                    "additionalProperties": True,
+                    "properties": {
+                        "timestamp": {"bsonType": "date"},
+                        "actor_id": {"bsonType": "string"},
+                        "method": {"bsonType": "string"},
+                        "endpoint": {"bsonType": "string"},
+                        "ip_address": {"bsonType": "string"},
+                    },
+                }
+            },
+            "validationAction": "error",
+            "validationLevel": "strict",
+        })
     
     # ==================== PATIENT OPERATIONS ====================
     
@@ -96,24 +132,21 @@ class MongoDB:
             {"$inc": {stat_name: 1}}
         )
     
-    async def _generate_patient_id(self):
-        """Generate unique patient ID in format RMD-YY-XXX"""
+    async def _generate_patient_id(self) -> str:
+        """Generate a unique patient ID atomically using a MongoDB counter.
+
+        Uses findOneAndUpdate with $inc so concurrent calls can never produce
+        the same sequence number — the increment is applied server-side in a
+        single round-trip with no read-modify-write gap.
+        """
         year = datetime.utcnow().strftime("%y")
-        prefix = f"RMD-{year}-"
-        
-        # Find latest patient for this year
-        latest = await self.db.patients.find_one(
-            {"patient_id": {"$regex": f"^{prefix}"}},
-            sort=[("patient_id", -1)]
+        counter_doc = await self.db.counters.find_one_and_update(
+            {"_id": f"patient_counter_{year}"},
+            {"$inc": {"seq": 1}},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
         )
-        
-        if latest:
-            last_num = int(latest["patient_id"].split("-")[2])
-            next_num = last_num + 1
-        else:
-            next_num = 1
-        
-        return f"{prefix}{next_num:03d}"
+        return f"RMD-{year}-{counter_doc['seq']:03d}"
     
     # ==================== BLOOD TEST OPERATIONS ====================
     
@@ -359,6 +392,97 @@ class MongoDB:
             {"$set": update_data}
         )
     
+    # ==================== USER / AUTH OPERATIONS ====================
+
+    async def get_user_by_email(self, email: str) -> dict | None:
+        """Search admin_users then doctors by email. Returns dict with 'role' included."""
+        user = await self.db.admin_users.find_one({"email": email})
+        if user:
+            user["role"] = "admin"
+            user["user_id"] = str(user.get("user_id") or user["_id"])
+            return user
+
+        user = await self.db.doctors.find_one({"email": email})
+        if user:
+            user["role"] = "doctor"
+            user["user_id"] = str(user.get("user_id") or user["_id"])
+            return user
+
+        return None
+
+    async def create_admin_user(self, email: str, password: str, name: str) -> str:
+        """Create an admin user with a bcrypt-hashed password.
+
+        To create the first admin from a Python shell:
+            from database.mongodb import MongoDB
+            import asyncio
+            async def seed():
+                db = MongoDB()
+                await db.connect()
+                uid = await db.create_admin_user("admin@remedi.lk", "changeme", "Admin")
+                print("Created admin:", uid)
+            asyncio.run(seed())
+        """
+        from core.security import hash_password
+        from uuid import uuid4
+
+        user_id = f"ADM-{uuid4().hex[:8].upper()}"
+        doc = {
+            "user_id": user_id,
+            "email": email,
+            "password_hash": hash_password(password),
+            "name": name,
+            "role": "admin",
+            "is_active": True,
+            "created_at": datetime.utcnow(),
+        }
+        await self.db.admin_users.insert_one(doc)
+        return user_id
+
+    async def create_doctor_user(
+        self, email: str, password: str, name: str, specialty: str = ""
+    ) -> str:
+        """Create a doctor account. Should only be called by admins."""
+        from core.security import hash_password
+        from uuid import uuid4
+
+        user_id = f"DOC-{uuid4().hex[:8].upper()}"
+        doc = {
+            "user_id": user_id,
+            "email": email,
+            "password_hash": hash_password(password),
+            "name": name,
+            "specialty": specialty,
+            "role": "doctor",
+            "is_active": True,
+            "created_at": datetime.utcnow(),
+        }
+        await self.db.doctors.insert_one(doc)
+        return user_id
+
+    # ==================== AUDIT LOG OPERATIONS ====================
+
+    async def create_audit_log(self, log_data: dict) -> None:
+        await self.db.audit_logs.insert_one(log_data)
+
+    async def get_audit_logs(
+        self,
+        patient_id: str = None,
+        actor_id: str = None,
+        start_date: datetime = None,
+        limit: int = 100,
+    ) -> list:
+        query: dict = {}
+        if patient_id:
+            query["patient_id"] = patient_id
+        if actor_id:
+            query["actor_id"] = actor_id
+        if start_date:
+            query["timestamp"] = {"$gte": start_date}
+
+        cursor = self.db.audit_logs.find(query).sort("timestamp", -1).limit(limit)
+        return await cursor.to_list(length=limit)
+
     # ==================== ADMIN OPERATIONS ====================
     
     async def get_admin_stats(self):
@@ -389,3 +513,25 @@ class MongoDB:
             "critical_patients": critical_patients,
             "timestamp": datetime.utcnow()
         }
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    async def _test_atomic_ids() -> None:
+        db = MongoDB()
+        await db.connect()
+
+        # Fire 10 concurrent ID generations — races are the whole point of the test
+        ids = await asyncio.gather(*[db._generate_patient_id() for _ in range(10)])
+
+        print("Generated IDs:")
+        for pid in sorted(ids):
+            print(f"  {pid}")
+
+        assert len(ids) == len(set(ids)), f"DUPLICATE IDs DETECTED: {ids}"
+        print(f"\n✓ All {len(ids)} IDs are unique — atomic counter confirmed")
+
+        await db.disconnect()
+
+    asyncio.run(_test_atomic_ids())

@@ -1,0 +1,23 @@
+llm:
+  model: gpt-4o-mini        # used by ConversationGraph
+  temperature: 0.3
+  report_model: gpt-4o      # used by ReportHandler (vision-capable model required)
+  report_temperature: 0.0
+  # Set to an openrouter model string to use OPENROUTER_API_KEY instead
+  # fallback_model: openrouter/meta-llama/llama-3.1-8b-instruct
+
+blood_pressure:
+  normal_systolic_max: 120
+  normal_diastolic_max: 80
+  warning_systolic_max: 140
+  warning_diastolic_max: 90
+  critical_systolic: 180
+  critical_diastolic: 120
+
+scheduler:
+  health_tip_interval_hours: 84    # 2x per week (~every 3.5 days)
+  bp_reminder_hour: 8              # local hour to send daily BP reminder
+  blood_test_reminder_days_before: 3
+
+session:
+  conversation_timeout_minutes: 30

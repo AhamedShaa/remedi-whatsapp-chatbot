@@ -1,14 +1,13 @@
 # handlers/bp_handler.py - Blood Pressure Logging Handler
 from datetime import datetime, timedelta
 import re
-import logging
-
-logger = logging.getLogger(__name__)
+from utils.logger import logger
 
 class BPHandler:
-    def __init__(self, db, whatsapp):
+    def __init__(self, db, whatsapp, redis_client):
         self.db = db
         self.whatsapp = whatsapp
+        self.redis = redis_client
     
     async def handle(self, state):
         """Main handler for BP logging flow"""
@@ -23,9 +22,8 @@ class BPHandler:
         else:
             # First time - prompt for BP reading
             await self._prompt_for_bp(phone)
-            # Update conversation state
-            await self.db.update_patient_conversation_state(
-                patient["patient_id"],
+            await self.redis.set_conversation_state(
+                phone,
                 {"stage": "bp_logging", "waiting_for": "bp_reading"}
             )
         
@@ -88,8 +86,7 @@ Enter your reading now:"""
         # Classify and send appropriate alert
         await self._send_bp_alert(phone, patient, systolic, diastolic)
         
-        # Clear conversation state
-        await self.db.update_patient_conversation_state(patient["patient_id"], None)
+        await self.redis.clear_conversation_state(phone)
     
     def _parse_bp_reading(self, text):
         """Parse BP reading from text (e.g., '120/80')"""

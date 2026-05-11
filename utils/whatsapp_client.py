@@ -1,30 +1,24 @@
 # utils/whatsapp_client.py - WhatsApp Cloud API Client
-import os
 import aiohttp
-import logging
 import base64
-
-logger = logging.getLogger(__name__)
+from config.settings import settings
+from utils.logger import logger
 
 class WhatsAppClient:
     def __init__(self):
-        # Align with .env variables and support fallbacks for legacy names
-        api_version = os.getenv("WHATSAPP_API_VERSION", "v18.0")
-        phone_number_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID") or os.getenv("PHONE_NUMBER_ID")
-        self.token = os.getenv("WHATSAPP_ACCESS_TOKEN") or os.getenv("WHATSAPP_TOKEN")
-
-        self.api_url = f"https://graph.facebook.com/{api_version}/{phone_number_id}"
+        self.token = settings.whatsapp_access_token
+        self.api_url = (
+            f"https://graph.facebook.com/{settings.whatsapp_api_version}"
+            f"/{settings.whatsapp_phone_number_id}"
+        )
         self.headers = {
             "Authorization": f"Bearer {self.token}",
             "Content-Type": "application/json"
         }
-
-        # Basic sanity checks with safe logging
-        if not phone_number_id:
-            logger.error("WhatsAppClient init failed: WHATSAPP_PHONE_NUMBER_ID not set")
-        if not self.token:
-            logger.error("WhatsAppClient init failed: WHATSAPP_ACCESS_TOKEN not set")
-        logger.info(f"WhatsAppClient configured: api_version={api_version}, phone_number_id_set={bool(phone_number_id)}")
+        logger.info(
+            f"WhatsAppClient configured: api_version={settings.whatsapp_api_version}, "
+            f"phone_number_id={settings.whatsapp_phone_number_id}"
+        )
     
     async def send_message(self, to, text):
         """Send text message"""
@@ -190,7 +184,7 @@ class WhatsAppClient:
             # Step 1: Get media URL
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"https://graph.facebook.com/{os.getenv('WHATSAPP_API_VERSION', 'v18.0')}/{media_id}",
+                    f"https://graph.facebook.com/{settings.whatsapp_api_version}/{media_id}",
                     headers={"Authorization": f"Bearer {self.token}"}
                 ) as response:
                     if response.status != 200:
@@ -266,10 +260,10 @@ Type *CARE* anytime to see the menu and access all features.
 
 We're here to support your health journey every step of the way!
 
-Questions? Call us at {os.getenv('SUPPORT_PHONE')}"""
+Questions? Call us at {settings.support_phone}"""
         
         await self.send_message(to, message)
-    
+
     async def send_payment_reminder(self, to, patient_name):
         """Send payment reminder"""
         message = f"""Hi {patient_name}! 👋
@@ -278,7 +272,7 @@ We noticed your payment is still pending.
 
 Complete your payment to activate your Remedi Chronic Care account:
 
-{os.getenv('PAYMENT_LINK')}
+{settings.payment_link}
 
 After payment, you'll get immediate access to:
 • Doctor consultations
@@ -286,6 +280,6 @@ After payment, you'll get immediate access to:
 • Health monitoring
 • And much more!
 
-Need help? Contact {os.getenv('SUPPORT_PHONE')}"""
+Need help? Contact {settings.support_phone}"""
         
         await self.send_message(to, message)

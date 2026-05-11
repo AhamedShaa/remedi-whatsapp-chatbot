@@ -1,15 +1,14 @@
 # handlers/teleconsult_handler.py
-import logging
 from datetime import datetime, timedelta
 import uuid
-import os
-
-logger = logging.getLogger(__name__)
+from config.settings import settings
+from utils.logger import logger
 
 class TeleconsultHandler:
-    def __init__(self, db, whatsapp):
+    def __init__(self, db, whatsapp, redis_client):
         self.db = db
         self.whatsapp = whatsapp
+        self.redis = redis_client
     
     async def handle(self, state):
         """Handle teleconsultation booking"""
@@ -21,9 +20,8 @@ class TeleconsultHandler:
         if not waiting_for or waiting_for != "appointment_selection":
             # Show available slots
             await self._show_available_slots(phone, patient)
-            # Update state
-            await self.db.update_patient_conversation_state(
-                patient["patient_id"],
+            await self.redis.set_conversation_state(
+                phone,
                 {"stage": "teleconsult", "waiting_for": "appointment_selection"}
             )
         else:
@@ -45,7 +43,7 @@ class TeleconsultHandler:
                 phone,
                 "❌ Sorry, no slots available in the next 7 days. Please try again later or contact support."
             )
-            await self.db.update_patient_conversation_state(patient["patient_id"], None)
+            await self.redis.clear_conversation_state(phone)
             return
         
         # Show only next 15 available slots for better UX
@@ -137,7 +135,7 @@ Or reply *CANCEL* to go back."""
                 phone,
                 "Booking cancelled. Type *CARE* to see the menu."
             )
-            await self.db.update_patient_conversation_state(patient["patient_id"], None)
+            await self.redis.clear_conversation_state(phone)
             return
         
         # Validate slot selection
@@ -183,9 +181,8 @@ Or reply *CANCEL* to go back."""
             except AttributeError:
                 pass  # Method doesn't exist yet
             
-            # Clear conversation state
-            await self.db.update_patient_conversation_state(patient["patient_id"], None)
-            
+            await self.redis.clear_conversation_state(phone)
+
         except ValueError:
             await self.whatsapp.send_message(
                 phone,
@@ -217,7 +214,7 @@ Or reply *CANCEL* to go back."""
         """Send appointment confirmation message"""
         day = slot['date'].strftime('%A, %B %d, %Y')
         
-        support_phone = os.getenv('SUPPORT_PHONE', '94706112112')
+        support_phone = settings.support_phone or '94706112112'
         
         message = f"""✅ *Appointment Confirmed!*
 
@@ -249,297 +246,3 @@ Need to reschedule? Contact: {support_phone}
 Type *CARE* for main menu."""
         
         await self.whatsapp.send_message(phone, message)
-
-
-# handlers/home_visit_handler.py
-import logging
-from datetime import datetime
-
-logger = logging.getLogger(__name__)
-
-class HomeVisitHandler:
-    def __init__(self, db, whatsapp):
-        self.db = db
-        self.whatsapp = whatsapp
-    
-    async def handle(self, state):
-        """Handle home visit request"""
-        phone = state["phone_number"]
-        patient = state["patient"]
-        
-        await self._request_home_visit(phone, patient)
-        
-        # Clear conversation state
-        await self.db.update_patient_conversation_state(patient["patient_id"], None)
-        
-        return state
-    
-    async def _request_home_visit(self, phone, patient):
-        """Process home visit request"""
-        message = f"""🏠 *Home Visit Request Received*
-
-Hi {patient['patient_name']}!
-
-Your request has been received. A doctor from *Hello Doctor* will contact you within *2 hours* to schedule your home visit.
-
-📋 *Please have ready:*
-• Your Patient ID: {patient['patient_id']}
-• Complete address in Colombo
-• Preferred time slot
-• Reason for visit
-
-📞 *Contact:*
-They'll call: {patient['whatsapp_number']}
-
-⏰ *What's Next?*
-1. Hello Doctor team will call you
-2. Confirm address and time
-3. Doctor visits your home
-4. Consultation and treatment
-
-💰 *Payment:*
-Payment details will be shared during the call.
-
-Need urgent help? Call us now:
-{os.getenv('EMERGENCY_PHONE')}
-
-Type *CARE* for main menu."""
-        
-        await self.whatsapp.send_message(phone, message)
-        
-        # Notify Hello Doctor team (integrate with their API)
-        await self._notify_hello_doctor_team(patient)
-        
-        # Log request
-        logger.info(f"Home visit requested by patient {patient['patient_id']}")
-    
-    async def _notify_hello_doctor_team(self, patient):
-        """Notify Hello Doctor team about the request"""
-        # This would integrate with Hello Doctor's API
-        # For now, we'll just log it
-        
-        notification_data = {
-            "patient_id": patient["patient_id"],
-            "patient_name": patient["patient_name"],
-            "phone": patient["whatsapp_number"],
-            "address": patient.get("address", "Not provided"),
-            "conditions": patient.get("health_conditions", []),
-            "request_time": datetime.utcnow(),
-            "priority": "high" if patient.get("is_high_risk") else "normal"
-        }
-        
-        logger.info(f"Hello Doctor notification: {notification_data}")
-        
-        # TODO: Implement actual API call
-        # await hello_doctor_api.create_visit_request(notification_data)
-
-
-# handlers/doctor_chat_handler.py
-import logging
-from datetime import datetime
-
-logger = logging.getLogger(__name__)
-
-class DoctorChatHandler:
-    def __init__(self, db, whatsapp):
-        self.db = db
-        self.whatsapp = whatsapp
-    
-    async def handle(self, state):
-        """Handle doctor chat functionality"""
-        phone = state["phone_number"]
-        patient = state["patient"]
-        text = state["context"]["text"]
-        waiting_for = state["waiting_for"]
-        
-        if not waiting_for or waiting_for != "doctor_chat":
-            # First time - check doctor availability
-            await self._initiate_chat(phone, patient)
-        else:
-            # Ongoing chat - forward message to doctor
-            await self._forward_to_doctor(state, text)
-        
-        return state
-    
-    async def _initiate_chat(self, phone, patient):
-        """Initiate chat with doctor"""
-        # Check if any doctor is available
-        doctor_available = await self._check_doctor_availability()
-        
-        if doctor_available:
-            await self._connect_to_doctor(phone, patient, doctor_available)
-        else:
-            await self._send_unavailable_message(phone, patient)
-    
-    async def _check_doctor_availability(self):
-        """Check if any doctor is currently available"""
-        # This would integrate with your doctor dashboard
-        # For now, simulate availability
-        
-        # In production, query doctor availability from database
-        # doctors = await self.db.db.doctors.find({"status": "online"}).to_list(1)
-        
-        # Simulate doctor availability (for demo)
-        import random
-        if random.random() > 0.5:  # 50% chance
-            return {
-                "name": "Dr. Silva",
-                "id": "DOC-001",
-                "specialty": "General Practitioner"
-            }
-        return None
-    
-    async def _connect_to_doctor(self, phone, patient, doctor):
-        """Connect patient to available doctor"""
-        message = f"""💬 *Chat with Doctor*
-
-Hi {patient['patient_name']}!
-
-*{doctor['name']}* ({doctor['specialty']}) has joined the chat.
-
-You can now ask your health questions. The doctor will respond shortly.
-
-📝 Please describe your concern clearly.
-
-Type *END CHAT* to finish the consultation."""
-        
-        await self.whatsapp.send_message(phone, message)
-        
-        # Update conversation state to doctor chat mode
-        await self.db.update_patient_conversation_state(
-            patient["patient_id"],
-            {
-                "stage": "doctor_chat",
-                "waiting_for": "doctor_chat",
-                "doctor_id": doctor['id'],
-                "doctor_name": doctor['name'],
-                "chat_started": datetime.utcnow()
-            }
-        )
-        
-        # Notify doctor dashboard
-        await self._notify_doctor_dashboard(patient, doctor)
-    
-    async def _send_unavailable_message(self, phone, patient):
-        """Send message when no doctor available"""
-        message = f"""💬 *Doctor Chat*
-
-Hi {patient['patient_name']}!
-
-All doctors are currently busy with other patients.
-
-*Estimated wait time:* 15 minutes
-
-*What would you like to do?*
-
-*1.* ⏳ Wait (we'll notify when available)
-*2.* 📞 Schedule teleconsultation instead
-*3.* 📝 Leave a message for callback
-
-Reply with 1, 2, or 3."""
-        
-        await self.whatsapp.send_message(phone, message)
-        
-        # Add to queue
-        await self._add_to_chat_queue(patient)
-    
-    async def _forward_to_doctor(self, state, text):
-        """Forward patient message to doctor"""
-        phone = state["phone_number"]
-        patient = state["patient"]
-        conv_state = state["patient"].get("conversation_state", {})
-        
-        # Check for end chat command
-        if text.upper() == "END CHAT":
-            await self._end_chat(phone, patient)
-            return
-        
-        # Save message to conversation history
-        if not patient.get("conversation_history"):
-            patient["conversation_history"] = []
-        
-        message_entry = {
-            "timestamp": datetime.utcnow(),
-            "sender": "patient",
-            "message": text
-        }
-        
-        await self.db.db.patients.update_one(
-            {"patient_id": patient["patient_id"]},
-            {"$push": {"conversation_history": message_entry}}
-        )
-        
-        # Forward to doctor dashboard
-        await self._notify_doctor_dashboard(patient, {
-            "id": conv_state.get("doctor_id"),
-            "name": conv_state.get("doctor_name")
-        }, text)
-        
-        # Send acknowledgment
-        await self.whatsapp.send_message(
-            phone,
-            "✓ Message sent to doctor. They'll respond shortly..."
-        )
-        
-        logger.info(f"Chat message from {patient['patient_id']}: {text}")
-    
-    async def _end_chat(self, phone, patient):
-        """End chat session"""
-        message = f"""💬 *Chat Ended*
-
-Thank you for using Remedi Doctor Chat!
-
-If you need further assistance:
-• Type *CARE* for main menu
-• Call {os.getenv('SUPPORT_PHONE')}
-
-Take care! 🌟"""
-        
-        await self.whatsapp.send_message(phone, message)
-        
-        # Clear conversation state
-        await self.db.update_patient_conversation_state(patient["patient_id"], None)
-        
-        # Archive chat history (optional)
-        # await self._archive_chat(patient)
-    
-    async def _add_to_chat_queue(self, patient):
-        """Add patient to waiting queue"""
-        queue_entry = {
-            "patient_id": patient["patient_id"],
-            "patient_name": patient["patient_name"],
-            "phone": patient["whatsapp_number"],
-            "conditions": patient.get("health_conditions", []),
-            "is_high_risk": patient.get("is_high_risk", False),
-            "queued_at": datetime.utcnow(),
-            "status": "waiting"
-        }
-        
-        # In production, save to queue collection
-        # await self.db.db.chat_queue.insert_one(queue_entry)
-        
-        logger.info(f"Added {patient['patient_id']} to chat queue")
-    
-    async def _notify_doctor_dashboard(self, patient, doctor, message=None):
-        """Notify doctor dashboard about chat request/message"""
-        notification = {
-            "type": "chat_request" if not message else "new_message",
-            "patient_id": patient["patient_id"],
-            "patient_name": patient["patient_name"],
-            "conditions": patient.get("health_conditions", []),
-            "is_high_risk": patient.get("is_high_risk", False),
-            "doctor_id": doctor.get("id"),
-            "message": message,
-            "timestamp": datetime.utcnow()
-        }
-        
-        # In production, this would:
-        # 1. Send websocket notification to doctor dashboard
-        # 2. Send push notification to doctor's mobile app
-        # 3. Log in doctor notification queue
-        
-        logger.info(f"Doctor notification: {notification}")
-        
-        # TODO: Implement actual notification system
-        # await doctor_websocket.send_notification(doctor['id'], notification)
-        # await push_notification.send_to_doctor(doctor['id'], notification)
