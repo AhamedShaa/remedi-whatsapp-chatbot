@@ -37,9 +37,9 @@ conversation_graph = ConversationGraph(db, whatsapp, redis_client)
 app.add_middleware(AuditMiddleware, db=db)
 
 app.include_router(webhook_router)
-app.include_router(auth_router,   prefix="/auth",   tags=["auth"])
-app.include_router(admin_router,  prefix="/admin",  tags=["admin"])
-app.include_router(doctor_router, prefix="/doctor", tags=["doctor"])
+app.include_router(auth_router,   prefix="/api/auth",   tags=["auth"])
+app.include_router(admin_router,  prefix="/api/admin",  tags=["admin"])
+app.include_router(doctor_router, prefix="/api/doctor", tags=["doctor"])
 
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
