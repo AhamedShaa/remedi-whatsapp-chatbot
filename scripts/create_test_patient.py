@@ -1,18 +1,21 @@
 """Create a test patient in MongoDB and schedule their blood tests.
 
 Usage:
-    python scripts/create_test_patient.py
+    python scripts/create_test_patient.py --phone "+94 70 551 1444" --name "Alavudeen" --approve
+    python scripts/create_test_patient.py --phone "94779848704" --approve
+    python scripts/create_test_patient.py --phone "94779848704"
 
-The script normalises the WhatsApp number (strips spaces), checks for
-an existing record so it's safe to run more than once, and prints the
-patient_id on success.
+The script normalises the WhatsApp number (strips spaces and leading +),
+checks for an existing record so it's safe to run more than once, and
+prints the patient_id on success.
 """
+import argparse
 import asyncio
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
-# Allow imports from the project root regardless of where the script is run from
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
@@ -21,38 +24,55 @@ load_dotenv()
 from database.mongodb import MongoDB
 
 
-_WHATSAPP_NUMBER = "94779848704"   # normalised: no spaces
+def parse_args():
+    parser = argparse.ArgumentParser(description="Create a test patient in MongoDB.")
+    parser.add_argument("--phone", required=True,
+                        help='WhatsApp number, e.g. "+94 70 551 1444" or "94779848704"')
+    parser.add_argument("--name", default="Test Patient",
+                        help="Patient display name (default: Test Patient)")
+    parser.add_argument("--conditions", default="Diabetes,Hypertension",
+                        help="Comma-separated health conditions (default: Diabetes,Hypertension)")
+    parser.add_argument("--approve", action="store_true",
+                        help="Set approval_status and payment_status to approved and is_active=True")
+    return parser.parse_args()
 
-_PATIENT = {
-    "patient_name": "Test Patient",
-    "whatsapp_number": _WHATSAPP_NUMBER,
-    "date_of_birth": "1980-01-15",
-    "gender": "Male",
-    "health_conditions": ["Diabetes", "Hypertension"],
-    "nic_number": "800115123V",
-    "approval_status": "pending",
-    "payment_status": "pending",
-    "conversation_state": None,
-}
+
+def normalise_phone(raw: str) -> str:
+    return re.sub(r"[\s+]", "", raw)
 
 
 async def main() -> None:
+    args = parse_args()
+    phone = normalise_phone(args.phone)
+    conditions = [c.strip() for c in args.conditions.split(",")]
+
+    patient_base = {
+        "patient_name": args.name,
+        "whatsapp_number": phone,
+        "date_of_birth": "1980-01-15",
+        "gender": "Male",
+        "health_conditions": conditions,
+        "nic_number": "800115123V",
+        "approval_status": "approved" if args.approve else "pending",
+        "payment_status": "approved" if args.approve else "pending",
+        "is_active": args.approve,
+        "conversation_state": None,
+    }
+
     db = MongoDB()
     await db.connect()
 
     try:
-        # Idempotency — skip if already exists
-        existing = await db.get_patient_by_phone(_WHATSAPP_NUMBER)
+        existing = await db.get_patient_by_phone(phone)
         if existing:
             print(f"Patient already exists: {existing['patient_id']}")
             await db.schedule_blood_tests(existing["patient_id"])
             print("Blood tests (re)scheduled.")
             return
 
-        # Build the document
         patient_id = await db._generate_patient_id()
         doc = {
-            **_PATIENT,
+            **patient_base,
             "patient_id": patient_id,
             "enrollment_date": datetime.utcnow(),
             "created_at": datetime.utcnow(),
